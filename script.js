@@ -1,4 +1,4 @@
-// ============================================================================
+/// ============================================================================
 // 1. SPA ROUTING & VIEW CONTROLLER
 // ============================================================================
 let currentView = 'cockpit';
@@ -187,7 +187,6 @@ function resizeRadarViewport() {
 }
 window.addEventListener('resize', resizeRadarViewport);
 
-// 3D Camera Implementation (Ported from Camera3D.java)[cite: 1]
 const camera3D = {
     azimuth: 0.8,
     elevation: 0.5,
@@ -205,17 +204,14 @@ const camera3D = {
         const dy = y - this.targetY;
         const dz = z - this.targetZ;
 
-        // Azimuth (Yaw)
         const x1 = dx * Math.cos(this.azimuth) - dz * Math.sin(this.azimuth);
         const z1 = dx * Math.sin(this.azimuth) + dz * Math.cos(this.azimuth);
         const y1 = dy;
 
-        // Elevation (Pitch)
         const y2 = y1 * Math.cos(this.elevation) - z1 * Math.sin(this.elevation);
         const z2 = y1 * Math.sin(this.elevation) + z1 * Math.cos(this.elevation);
         const x2 = x1;
 
-        // Perspective depth calculation
         const depth = z2 + this.distance;
         if (depth <= 20) return null;
 
@@ -229,21 +225,20 @@ const camera3D = {
     }
 };
 
-// Interactive Mouse Controls for 3D Camera
 rCanvas.addEventListener('mousedown', e => {
-    camera3D.isDragging = true;
+    camera3D.isDragging = false;
     camera3D.lastMouseX = e.clientX;
     camera3D.lastMouseY = e.clientY;
 });
 
-window.addEventListener('mouseup', () => {
-    camera3D.isDragging = false;
-});
-
 window.addEventListener('mousemove', e => {
-    if (!camera3D.isDragging || currentView !== 'cockpit') return;
+    if (e.buttons !== 1 || currentView !== 'cockpit') return;
     const deltaX = e.clientX - camera3D.lastMouseX;
     const deltaY = e.clientY - camera3D.lastMouseY;
+
+    if (Math.abs(deltaX) > 2 || Math.abs(deltaY) > 2) {
+        camera3D.isDragging = true;
+    }
 
     camera3D.azimuth += deltaX * 0.008;
     camera3D.elevation = Math.max(0.1, Math.min(1.4, camera3D.elevation + deltaY * 0.008));
@@ -262,7 +257,6 @@ rCanvas.addEventListener('wheel', e => {
         `AZIMUTH: ${(camera3D.azimuth * 180 / Math.PI).toFixed(1)}° | ELEV: ${(camera3D.elevation * 180 / Math.PI).toFixed(1)}° | ZOOM: ${(1200 / camera3D.distance).toFixed(1)}x`;
 }, { passive: false });
 
-// Camera Presets
 document.getElementById('cam-iso').addEventListener('click', () => {
     camera3D.azimuth = 0.8;
     camera3D.elevation = 0.55;
@@ -284,7 +278,6 @@ document.getElementById('cam-chase').addEventListener('click', () => {
     }
 });
 
-// Airspace Simulation Models
 let fleet = [];
 let obstacles = [];
 let noFlyZones = [];
@@ -292,8 +285,9 @@ let explosions = [];
 let simMode = 1;
 let lastTickTime = performance.now();
 let rotorAngle = 0;
+let selectedDroneId = null;
 
-class Drone {
+class SimulationDrone {
     constructor(id, x, y, z, vx, vy, vz) {
         this.id = id;
         this.x = x;
@@ -311,7 +305,6 @@ class Drone {
         this.y += this.vy * dt;
         this.z += this.vz * dt;
 
-        // Perimeter bounds bouncing
         if (Math.abs(this.x) > 650) this.vx *= -1;
         if (Math.abs(this.z) > 650) this.vz *= -1;
         if (this.y > 350 || this.y < 20) this.vy *= -1;
@@ -319,6 +312,18 @@ class Drone {
 
     distance3D(other) {
         return Math.hypot(this.x - other.x, this.y - other.y, this.z - other.z);
+    }
+}
+
+function deleteDrone(id) {
+    const index = fleet.findIndex(d => d.id.toLowerCase() === id.toLowerCase());
+    if (index !== -1) {
+        const removed = fleet.splice(index, 1)[0];
+        if (selectedDroneId === removed.id) selectedDroneId = null;
+        logAlert(`PURGED: Unit ${removed.id} removed from airspace.`, "log");
+        document.getElementById('hud-delete-id').value = '';
+    } else {
+        logAlert(`DELETE FAILED: Unit ${id} not found in active fleet.`, "alert");
     }
 }
 
@@ -331,18 +336,48 @@ function logAlert(msg, type = "log") {
     if (stream.children.length > 8) stream.removeChild(stream.lastChild);
 }
 
+function updateSelectedTelemetry() {
+    const container = document.getElementById('selected-drone-telemetry');
+    if (!container) return;
+
+    if (!selectedDroneId) {
+        container.innerHTML = `<div class="telemetry-placeholder">Click a drone on radar to lock telemetry targeting.</div>`;
+        return;
+    }
+
+    const drone = fleet.find(d => d.id === selectedDroneId);
+    if (!drone) {
+        selectedDroneId = null;
+        container.innerHTML = `<div class="telemetry-placeholder">Target lost or destroyed.</div>`;
+        return;
+    }
+
+    const speed = Math.hypot(drone.vx, drone.vy, drone.vz).toFixed(1);
+
+    container.innerHTML = `
+        <div class="telemetry-data-grid">
+            <div class="telemetry-data-row"><span>CALLSIGN:</span> <span>${drone.id}</span></div>
+            <div class="telemetry-data-row"><span>STATUS:</span> <span style="color: ${drone.status === 'DANGER' ? 'var(--accent-red)' : 'var(--accent-green)'};">${drone.status}</span></div>
+            <div class="telemetry-data-row"><span>POS (X,Y,Z):</span> <span>${drone.x.toFixed(0)}, ${drone.y.toFixed(0)}, ${drone.z.toFixed(0)}</span></div>
+            <div class="telemetry-data-row"><span>VEL VECTOR:</span> <span>[${drone.vx.toFixed(1)}, ${drone.vy.toFixed(1)}, ${drone.vz.toFixed(1)}]</span></div>
+            <div class="telemetry-data-row"><span>SPEED:</span> <span>${speed} m/s</span></div>
+            <button class="btn-solid-orange" onclick="deleteDrone('${drone.id}')" style="background: var(--accent-red); color: #fff; margin-top: 0.5rem;">PURGE THIS DRONE</button>
+        </div>
+    `;
+}
+
 function loadScenario(type) {
     fleet = [];
     obstacles = [];
     noFlyZones = [];
     explosions = [];
+    selectedDroneId = null;
     camera3D.targetX = 0;
     camera3D.targetY = 0;
     camera3D.targetZ = 0;
     document.getElementById('hud-alert-stream').innerHTML = '';
 
     if (type === 'swarm') {
-        // Procedural City Center
         for (let i = 0; i < 8; i++) {
             obstacles.push({
                 x: (Math.random() - 0.5) * 600,
@@ -355,7 +390,7 @@ function loadScenario(type) {
         noFlyZones.push({ x: 0, z: 0, r: 120, h: 250 });
 
         for (let i = 0; i < 28; i++) {
-            fleet.push(new Drone(
+            fleet.push(new SimulationDrone(
                 `SWARM-${i + 1}`,
                 (Math.random() - 0.5) * 700,
                 60 + Math.random() * 180,
@@ -368,17 +403,16 @@ function loadScenario(type) {
         logAlert("SCENARIO LOADED: Dense Urban Swarm. Obstacles and NFZ active.", "log");
     } else if (type === 'intercept') {
         obstacles.push({ x: 0, z: 0, w: 90, d: 90, h: 220 });
-        fleet.push(new Drone("ALPHA-1", -350, 120, 0, 75, 0, 0));
-        fleet.push(new Drone("BRAVO-2", 350, 120, 0, -75, 0, 0));
-        fleet.push(new Drone("CHARLIE-3", 0, 120, -350, 0, 0, 75));
-        fleet.push(new Drone("DELTA-4", 0, 120, 350, 0, 0, -75));
+        fleet.push(new SimulationDrone("ALPHA-1", -350, 120, 0, 75, 0, 0));
+        fleet.push(new SimulationDrone("BRAVO-2", 350, 120, 0, -75, 0, 0));
+        fleet.push(new SimulationDrone("CHARLIE-3", 0, 120, -350, 0, 0, 75));
+        fleet.push(new SimulationDrone("DELTA-4", 0, 120, 350, 0, 0, -75));
         logAlert("SCENARIO LOADED: High-Speed Intercept Vectors.", "log");
     } else {
         logAlert("SCENARIO LOADED: Blank Slate. Awaiting manual injection.", "log");
     }
 }
 
-// Event Listeners for UI
 document.getElementById('btn-load-scenario').addEventListener('click', () => {
     loadScenario(document.getElementById('hud-scenario').value);
 });
@@ -401,8 +435,17 @@ document.getElementById('btn-inject-drone').addEventListener('click', () => {
     const vy = parseFloat(document.getElementById('hud-vy').value) || 0;
     const vz = parseFloat(document.getElementById('hud-vz').value) || 0;
 
-    fleet.push(new Drone(id, x, y, z, vx, vy, vz));
+    fleet.push(new SimulationDrone(id, x, y, z, vx, vy, vz));
     logAlert(`INJECTED: Drone ${id} launched into airspace.`, "log");
+});
+
+document.getElementById('btn-delete-drone').addEventListener('click', () => {
+    const idToDelete = document.getElementById('hud-delete-id').value.trim();
+    if (!idToDelete) {
+        logAlert("DELETE FAILED: Please enter a Drone ID.", "alert");
+        return;
+    }
+    deleteDrone(idToDelete);
 });
 
 document.getElementById('btn-inject-building').addEventListener('click', () => {
@@ -419,7 +462,68 @@ document.getElementById('btn-inject-building').addEventListener('click', () => {
     }
 });
 
-// Render Loop (Directly Executing Vector Graphics from RadarCanvas.java)[cite: 1]
+rCanvas.addEventListener('click', e => {
+    if (camera3D.isDragging) return;
+
+    const rect = rCanvas.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const clickY = e.clientY - rect.top;
+
+    let closestDrone = null;
+    let minDistance = 25;
+
+    fleet.forEach(d => {
+        const proj = camera3D.project(d.x, d.y, d.z);
+        if (proj) {
+            const dist = Math.hypot(proj.x - clickX, proj.y - clickY);
+            if (dist < minDistance) {
+                minDistance = dist;
+                closestDrone = d;
+            }
+        }
+    });
+
+    if (closestDrone) {
+        if (selectedDroneId === closestDrone.id) {
+            if (confirm(`Delete drone ${closestDrone.id}?`)) {
+                deleteDrone(closestDrone.id);
+            }
+        } else {
+            selectedDroneId = closestDrone.id;
+            document.getElementById('hud-delete-id').value = closestDrone.id;
+            logAlert(`TELEMETRY LOCK: Target acquired [${closestDrone.id}]. Click again to delete.`, "log");
+        }
+    } else {
+        selectedDroneId = null;
+    }
+});
+
+function drawAxis3D(origin, end, color, label) {
+    if (!origin || !end) return;
+
+    rCtx.strokeStyle = color;
+    rCtx.fillStyle = color;
+    rCtx.lineWidth = 3;
+
+    rCtx.beginPath();
+    rCtx.moveTo(origin.x, origin.y);
+    rCtx.lineTo(end.x, end.y);
+    rCtx.stroke();
+
+    const angle = Math.atan2(end.y - origin.y, end.x - origin.x);
+    const headLen = 10;
+
+    rCtx.beginPath();
+    rCtx.moveTo(end.x, end.y);
+    rCtx.lineTo(end.x - headLen * Math.cos(angle - Math.PI / 6), end.y - headLen * Math.sin(angle - Math.PI / 6));
+    rCtx.lineTo(end.x - headLen * Math.cos(angle + Math.PI / 6), end.y - headLen * Math.sin(angle + Math.PI / 6));
+    rCtx.closePath();
+    rCtx.fill();
+
+    rCtx.font = 'bold 12px monospace';
+    rCtx.fillText(label, end.x + 8, end.y + 4);
+}
+
 function renderTacticalRadar() {
     requestAnimationFrame(renderTacticalRadar);
     if (currentView !== 'cockpit') return;
@@ -429,11 +533,9 @@ function renderTacticalRadar() {
     lastTickTime = now;
     rotorAngle += 0.8;
 
-    // Viewport Clear
     rCtx.fillStyle = '#02040a';
     rCtx.fillRect(0, 0, rCanvas.width, rCanvas.height);
 
-    // 1. Draw Ground Coordinate Grid
     rCtx.strokeStyle = 'rgba(0, 212, 255, 0.15)';
     rCtx.lineWidth = 1;
     for (let i = -700; i <= 700; i += 100) {
@@ -455,7 +557,15 @@ function renderTacticalRadar() {
         }
     }
 
-    // 2. Draw 3D Wireframe Obstacles
+    const origin = camera3D.project(0, 0, 0);
+    const xAxis = camera3D.project(250, 0, 0);
+    const yAxis = camera3D.project(0, 250, 0);
+    const zAxis = camera3D.project(0, 0, 250);
+
+    drawAxis3D(origin, xAxis, '#ff2a2a', '+X');
+    drawAxis3D(origin, yAxis, '#10b981', '+Y (ALT)');
+    drawAxis3D(origin, zAxis, '#00d4ff', '+Z');
+
     obstacles.forEach(b => {
         const hw = b.w / 2;
         const hd = b.d / 2;
@@ -471,7 +581,6 @@ function renderTacticalRadar() {
         ];
 
         if (pts.every(p => p !== null)) {
-            // Dark solid faces
             rCtx.fillStyle = 'rgba(10, 15, 24, 0.75)';
             rCtx.beginPath();
             rCtx.moveTo(pts[4].x, pts[4].y);
@@ -481,10 +590,8 @@ function renderTacticalRadar() {
             rCtx.closePath();
             rCtx.fill();
 
-            // Wireframe Edges
             rCtx.strokeStyle = 'rgba(0, 212, 255, 0.5)';
             rCtx.lineWidth = 1.5;
-            // Base
             rCtx.beginPath();
             rCtx.moveTo(pts[0].x, pts[0].y);
             rCtx.lineTo(pts[1].x, pts[1].y);
@@ -492,7 +599,7 @@ function renderTacticalRadar() {
             rCtx.lineTo(pts[3].x, pts[3].y);
             rCtx.closePath();
             rCtx.stroke();
-            // Roof
+            
             rCtx.beginPath();
             rCtx.moveTo(pts[4].x, pts[4].y);
             rCtx.lineTo(pts[5].x, pts[5].y);
@@ -500,7 +607,7 @@ function renderTacticalRadar() {
             rCtx.lineTo(pts[7].x, pts[7].y);
             rCtx.closePath();
             rCtx.stroke();
-            // Pillars
+            
             for (let i = 0; i < 4; i++) {
                 rCtx.beginPath();
                 rCtx.moveTo(pts[i].x, pts[i].y);
@@ -510,7 +617,6 @@ function renderTacticalRadar() {
         }
     });
 
-    // 3. Draw No-Fly Zones
     noFlyZones.forEach(nf => {
         rCtx.strokeStyle = 'rgba(239, 68, 68, 0.5)';
         rCtx.fillStyle = 'rgba(239, 68, 68, 0.08)';
@@ -537,12 +643,10 @@ function renderTacticalRadar() {
         }
     });
 
-    // 4. Update Physics & Process Collisions (Sweep Line Broad-Phase)[cite: 1, 2]
     fleet.forEach(d => {
         d.update(dt);
         d.status = 'NOMINAL';
 
-        // Obstacle checks
         obstacles.forEach(b => {
             const hw = b.w / 2;
             const hd = b.d / 2;
@@ -558,7 +662,6 @@ function renderTacticalRadar() {
             }
         });
 
-        // NFZ checks
         noFlyZones.forEach(nf => {
             if (Math.hypot(d.x - nf.x, d.z - nf.z) < nf.r && d.y < nf.h) {
                 d.status = 'DANGER';
@@ -569,21 +672,19 @@ function renderTacticalRadar() {
         });
     });
 
-    // Sweep Line Algorithm for Pairwise Checks[cite: 1, 2]
     if (simMode === 1) {
         const sorted = [...fleet].sort((a, b) => a.x - b.x);
         for (let i = 0; i < sorted.length; i++) {
             for (let j = i + 1; j < sorted.length; j++) {
                 const d1 = sorted[i];
                 const d2 = sorted[j];
-                if (Math.abs(d1.x - d2.x) > 100) break; // Sweep Line Prune
+                if (Math.abs(d1.x - d2.x) > 100) break;
 
                 const dist = d1.distance3D(d2);
-                if (dist < 90) { // TCPA Alert Threshold
+                if (dist < 90) {
                     d1.status = 'DANGER';
                     d2.status = 'DANGER';
 
-                    // Draw TCPA Proximity Alert Vector
                     const p1 = camera3D.project(d1.x, d1.y, d1.z);
                     const p2 = camera3D.project(d2.x, d2.y, d2.z);
                     if (p1 && p2) {
@@ -597,7 +698,6 @@ function renderTacticalRadar() {
                         rCtx.setLineDash([]);
                     }
 
-                    // Kinetic Evasion Maneuver (EvasionAdvisor.java)[cite: 1, 2]
                     const force = (90 - dist) / 90;
                     const dx = (d1.x - d2.x) / dist;
                     const dy = (d1.y - d2.y) / dist;
@@ -614,7 +714,6 @@ function renderTacticalRadar() {
             }
         }
     } else {
-        // Mode 2: Unregulated Brute Force Crashes
         for (let i = 0; i < fleet.length; i++) {
             for (let j = i + 1; j < fleet.length; j++) {
                 const d1 = fleet[i];
@@ -631,13 +730,11 @@ function renderTacticalRadar() {
         }
     }
 
-    // 5. Draw Drones with Geometric Quadcopter Rigging
     fleet.forEach(d => {
         const proj = camera3D.project(d.x, d.y, d.z);
         const shadow = camera3D.project(d.x, 0, d.z);
 
         if (proj && shadow) {
-            // Altitude drop line
             rCtx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
             rCtx.lineWidth = 1;
             rCtx.beginPath();
@@ -645,17 +742,24 @@ function renderTacticalRadar() {
             rCtx.lineTo(proj.x, proj.y);
             rCtx.stroke();
 
-            // Ground shadow ellipse
             rCtx.fillStyle = 'rgba(0, 212, 255, 0.2)';
             rCtx.beginPath();
             rCtx.ellipse(shadow.x, shadow.y, 10 * shadow.scale, 5 * shadow.scale, 0, 0, Math.PI * 2);
             rCtx.fill();
 
-            // Drone Quadcopter Rigging
+            if (d.id === selectedDroneId) {
+                rCtx.strokeStyle = '#00d4ff';
+                rCtx.lineWidth = 2;
+                rCtx.setLineDash([4, 2]);
+                rCtx.beginPath();
+                rCtx.arc(proj.x, proj.y, Math.max(0.4, proj.scale * 45) * 1.3, 0, Math.PI * 2);
+                rCtx.stroke();
+                rCtx.setLineDash([]);
+            }
+
             const s = Math.max(0.4, proj.scale * 45);
             const isDanger = d.status === 'DANGER';
 
-            // Drone Arms (X-Shape)
             rCtx.strokeStyle = isDanger ? '#ef4444' : '#00d4ff';
             rCtx.lineWidth = 2;
             rCtx.beginPath();
@@ -665,7 +769,6 @@ function renderTacticalRadar() {
             rCtx.lineTo(proj.x + s, proj.y - s * 0.5);
             rCtx.stroke();
 
-            // Rotating Propellers
             rCtx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
             rCtx.lineWidth = 1.2;
             [[-s, -s * 0.5], [s, s * 0.5], [-s, s * 0.5], [s, -s * 0.5]].forEach(pos => {
@@ -674,13 +777,11 @@ function renderTacticalRadar() {
                 rCtx.stroke();
             });
 
-            // Center Fuselage
             rCtx.fillStyle = isDanger ? '#ef4444' : '#ff6a00';
             rCtx.beginPath();
             rCtx.arc(proj.x, proj.y, s * 0.35, 0, Math.PI * 2);
             rCtx.fill();
 
-            // Heading Vector Indicator
             rCtx.strokeStyle = '#ffffff';
             rCtx.lineWidth = 1.5;
             rCtx.beginPath();
@@ -688,14 +789,12 @@ function renderTacticalRadar() {
             rCtx.lineTo(proj.x + (d.vx * 0.4), proj.y + (d.vz * 0.4));
             rCtx.stroke();
 
-            // Callsign Label
             rCtx.fillStyle = '#f8fafc';
             rCtx.font = '10px monospace';
             rCtx.fillText(`${d.id} [${d.y.toFixed(0)}m]`, proj.x + s + 2, proj.y - 4);
         }
     });
 
-    // 6. Draw Explosion Shockwaves
     explosions.forEach((exp, index) => {
         exp.age += dt;
         const ep = camera3D.project(exp.x, exp.y, exp.z);
@@ -710,18 +809,17 @@ function renderTacticalRadar() {
         if (exp.age > 1) explosions.splice(index, 1);
     });
 
-    // Update Telemetry Metrics
     document.getElementById('hud-val-fleet').innerText = fleet.length;
     document.getElementById('hud-val-lat').innerText = (performance.now() - now).toFixed(1) + "ms";
+    updateSelectedTelemetry();
 }
 
-// Initial Boot of Section 3
 loadScenario('swarm');
 resizeRadarViewport();
 requestAnimationFrame(renderTacticalRadar);
 
 // ============================================================================
-// 5. SECTION 4: CLI BACKEND COMPILER
+// 5. SECTION 4: CLI BACKEND COMPILER (MATCHING DroneSystem.java 8-OPTION MENU)
 // ============================================================================
 const btnRunCli = document.getElementById('btn-run-java');
 const termOutput = document.getElementById('term-window');
@@ -729,7 +827,8 @@ const cliInputArea = document.getElementById('cli-input-area');
 const termInput = document.getElementById('term-input-field');
 
 let termState = 0;
-const termDB = new Map();
+const termDroneMap = new Map();
+const termZones = [{ id: "Airport_Runway", cx: 0, cy: 0, cz: 0, radius: 50 }];
 
 function termPrint(text) {
     termOutput.innerHTML += `<div>${text}</div>`;
@@ -744,72 +843,184 @@ btnRunCli.addEventListener('click', () => {
     termState = 0;
 
     termPrint("Starting JVM Environment...");
-    termPrint("Compiling SweepLineDetector.java... [OK]");
+    termPrint("Compiling DroneSystem.java... [OK]");
 
     setTimeout(() => {
-        termPrint("<br>==================================================");
+        termPrint("==================================================");
         termPrint("✈️ REAL-TIME DRONE AIRSPACE MONITORING SYSTEM ✈️");
         termPrint("==================================================");
+        printMenuPrompt();
         btnRunCli.innerText = "▶ RUN COMPILER";
         btnRunCli.disabled = false;
         cliInputArea.style.display = 'flex';
         termState = 1;
-        printMenu();
-    }, 1200);
+    }, 1000);
 });
 
-function printMenu() {
-    termPrint("<br>--- COMMAND MENU ---");
+function printMenuPrompt() {
+    termPrint("<br>--- MAIN MENU ---");
     termPrint("1. Add Drone (Dynamic Insertion)");
     termPrint("2. Remove Drone (Dynamic Deletion)");
-    termPrint("3. Run Sweep Line Collision Detection");
-    termPrint("4. View Fleet");
-    termPrint("Awaiting input...");
+    termPrint("3. Advance Time / Update Trajectories");
+    termPrint("4. Run Sweep Line Collision Detection (2D/3D)");
+    termPrint("5. Query Nearest Neighbor (KD-Tree)");
+    termPrint("6. Query 2D Point Location / Range (Quad Tree)");
+    termPrint("7. View All Drones");
+    termPrint("8. Exit");
+    termPrint("Select an option: ");
 }
 
 termInput.addEventListener('keydown', e => {
     if (e.key === 'Enter' && termState > 0) {
         const val = termInput.value.trim();
-        termPrint(`<span style="color: #cbd5e1;">root@skyshield:~# ${val}</span>`);
+        termPrint(`<span style="color: #cbd5e1;">${val}</span>`);
         termInput.value = '';
 
         if (termState === 1) {
             switch (val) {
                 case "1":
-                    termPrint("Enter: ID X Y Z Vx Vy Vz (space-separated):");
+                    termPrint("Enter ID, x, y, z, vx, vy, vz (space-separated): ");
                     termState = 2;
                     break;
                 case "2":
-                    termPrint("Enter Drone ID to remove:");
+                    termPrint("Enter Drone ID to remove: ");
                     termState = 3;
                     break;
                 case "3":
-                    if (termDB.size < 2) termPrint("✅ Airspace clear.");
-                    else termPrint("Scan complete. Logarithmic pruning successful.");
-                    printMenu();
+                    termPrint("Enter time step (dt in seconds): ");
+                    termState = 4;
                     break;
                 case "4":
-                    if (termDB.size === 0) termPrint("Fleet Empty.");
-                    termDB.forEach(d => termPrint(`ID:${d.id} POS:[${d.x},${d.y},${d.z}] VEL:[${d.vx},${d.vy},${d.vz}]`));
-                    printMenu();
+                    termPrint("<br>Executing Sweep Line Collision Algorithm...");
+                    if (termDroneMap.size < 2) {
+                        termPrint("✅ Sweep Line Check: Airspace is clear of collisions.");
+                    } else {
+                        const drones = Array.from(termDroneMap.values());
+                        drones.sort((a, b) => (a.x - 10.0) - (b.x - 10.0));
+                        let alertsCount = 0;
+                        for (let i = 0; i < drones.length; i++) {
+                            for (let j = i + 1; j < drones.length; j++) {
+                                const d1 = drones[i], d2 = drones[j];
+                                if ((d1.x + 10.0) < (d2.x - 10.0)) break;
+                                const dy = !((d2.y + 10.0) < (d1.y - 10.0) || (d2.y - 10.0) > (d1.y + 10.0));
+                                if (dy) {
+                                    const dist = Math.sqrt(Math.pow(d1.x - d2.x, 2) + Math.pow(d1.y - d2.y, 2) + Math.pow(d1.z - d2.z, 2));
+                                    if (dist <= 20.0) {
+                                        termPrint(`🚨 [COLLISION ALERT via Sweep Line] ${d1.id} and ${d2.id} are critically close (${dist.toFixed(2)}m)!`);
+                                        alertsCount++;
+                                    }
+                                }
+                            }
+                        }
+                        if (alertsCount === 0) termPrint("✅ Sweep Line Check: Airspace is clear of collisions.");
+                    }
+                    printMenuPrompt();
+                    break;
+                case "5":
+                    termPrint("Enter target coordinates X Y Z (space-separated): ");
+                    termState = 5;
+                    break;
+                case "6":
+                    termPrint("Enter search center X Y and Area Radius (space-separated): ");
+                    termState = 6;
+                    break;
+                case "7":
+                    if (termDroneMap.size === 0) {
+                        termPrint("No drones in airspace.");
+                    } else {
+                        termDroneMap.forEach(d => {
+                            termPrint(`${d.id} at [${d.x.toFixed(1)}, ${d.y.toFixed(1)}, ${d.z.toFixed(1)}]`);
+                        });
+                    }
+                    printMenuPrompt();
+                    break;
+                case "8":
+                    termPrint("System shutting down...");
+                    cliInputArea.style.display = 'none';
+                    termState = 0;
                     break;
                 default:
-                    termPrint("❌ Invalid Command.");
-                    printMenu();
+                    termPrint("❌ Invalid choice. Try again.");
+                    printMenuPrompt();
             }
-        } else if (termState === 2) {
+        } else if (termState === 2) { // Option 1: Add Drone
             const p = val.split(" ");
             if (p.length >= 7) {
-                termDB.set(p[0], { id: p[0], x: p[1], y: p[2], z: p[3], vx: p[4], vy: p[5], vz: p[6] });
-                termPrint(`✅ Unit ${p[0]} injected into Memory.`);
-            } else termPrint("❌ Syntax Error.");
+                const droneObj = {
+                    id: p[0],
+                    x: parseFloat(p[1]), y: parseFloat(p[2]), z: parseFloat(p[3]),
+                    vx: parseFloat(p[4]), vy: parseFloat(p[5]), vz: parseFloat(p[6]),
+                    radius: 10.0
+                };
+                termDroneMap.set(p[0], droneObj);
+                termPrint("✅ Drone dynamically inserted.");
+            } else {
+                termPrint("❌ Input error. Please use correct formatting.");
+            }
             termState = 1;
-            printMenu();
-        } else if (termState === 3) {
-            if (termDB.delete(val)) termPrint(`✅ Unit ${val} purged.`);
-            else termPrint(`❌ 404 Unit Not Found.`);
+            printMenuPrompt();
+        } else if (termState === 3) { // Option 2: Remove Drone
+            if (termDroneMap.delete(val)) {
+                termPrint("✅ Drone deleted.");
+            } else {
+                termPrint("❌ Drone not found.");
+            }
             termState = 1;
-            printMenu();
+            printMenuPrompt();
+        } else if (termState === 4) { // Option 3: Advance Trajectories
+            const dt = parseFloat(val) || 1.0;
+            termDroneMap.forEach(d => {
+                d.x += d.vx * dt;
+                d.y += d.vy * dt;
+                d.z += d.vz * dt;
+                termZones.forEach(zone => {
+                    const dist = Math.sqrt(Math.pow(zone.cx - d.x, 2) + Math.pow(zone.cy - d.y, 2) + Math.pow(zone.cz - d.z, 2));
+                    if (dist <= zone.radius) {
+                        termPrint(`⚠️ NO-FLY ZONE VIOLATION: ${d.id}`);
+                    }
+                });
+            });
+            termPrint("✅ Trajectories updated.");
+            termState = 1;
+            printMenuPrompt();
+        } else if (termState === 5) { // Option 5: KD-Tree Nearest Neighbor
+            const coords = val.split(" ");
+            if (coords.length >= 3 && termDroneMap.size > 0) {
+                const tx = parseFloat(coords[0]), ty = parseFloat(coords[1]), tz = parseFloat(coords[2]);
+                let best = null;
+                let bestDist = Number.MAX_VALUE;
+                termDroneMap.forEach(d => {
+                    const dist = Math.sqrt(Math.pow(d.x - tx, 2) + Math.pow(d.y - ty, 2) + Math.pow(d.z - tz, 2));
+                    if (dist < bestDist) {
+                        bestDist = dist;
+                        best = d;
+                    }
+                });
+                if (best) {
+                    termPrint(`🎯 Nearest Drone (KD-Tree): ${best.id} at [${best.x.toFixed(1)}, ${best.y.toFixed(1)}, ${best.z.toFixed(1)}]`);
+                }
+            } else {
+                termPrint("No drones in airspace.");
+            }
+            termState = 1;
+            printMenuPrompt();
+        } else if (termState === 6) { // Option 6: Quad Tree Range Query
+            const qCoords = val.split(" ");
+            if (qCoords.length >= 3 && termDroneMap.size > 0) {
+                const cx = parseFloat(qCoords[0]), cy = parseFloat(qCoords[1]), radius = parseFloat(qCoords[2]);
+                const found = [];
+                termDroneMap.forEach(d => {
+                    if (d.x >= cx - radius && d.x <= cx + radius && d.y >= cy - radius && d.y <= cy + radius) {
+                        found.push(d);
+                    }
+                });
+                termPrint(`📍 Drones found in area (Quad Tree): ${found.length}`);
+                found.forEach(fd => termPrint(`  - ${fd.id}`));
+            } else {
+                termPrint("📍 Drones found in area (Quad Tree): 0");
+            }
+            termState = 1;
+            printMenuPrompt();
         }
     }
 });
